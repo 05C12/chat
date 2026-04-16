@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Похідна на графіку</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --line: #334155;
+      --text: #e2e8f0;
+      --accent: #22d3ee;
+      --danger: #f87171;
+      --ok: #4ade80;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -20%, #1e293b, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 24px;
+    }
+
+    .app {
+      width: min(980px, 100%);
+      background: color-mix(in oklab, var(--panel) 92%, black 8%);
+      border: 1px solid #1f2937;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 20px 35px rgba(0, 0, 0, 0.35);
+      display: grid;
+      gap: 16px;
+    }
+
+    .controls {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      align-items: end;
+    }
+
+    label {
+      font-size: 0.9rem;
+      color: #cbd5e1;
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input, button {
+      width: 100%;
+      background: #0b1220;
+      border: 1px solid #273449;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 1rem;
+    }
+
+    input[type="range"] {
+      padding: 0;
+      accent-color: var(--accent);
+    }
+
+    button {
+      cursor: pointer;
+      background: linear-gradient(180deg, #0891b2, #0e7490);
+      border: none;
+      font-weight: 700;
+    }
+
+    .canvas-wrap {
+      background: #020617;
+      border-radius: 12px;
+      border: 1px solid #243041;
+      padding: 10px;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      height: auto;
+      display: block;
+      border-radius: 8px;
+      background: #020617;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+    }
+
+    .card {
+      background: #0b1220;
+      border: 1px solid #273449;
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    .hint { color: #94a3b8; font-size: 0.88rem; }
+    .error { color: var(--danger); }
+    .success { color: var(--ok); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Пошук похідної на графіку</h1>
+    <div class="controls">
+      <div>
+        <label for="expr">Функція f(x)</label>
+        <input id="expr" value="x^3 - 2*x" />
+      </div>
+      <div>
+        <label for="xPoint">Точка x₀: <span id="xLabel">1.00</span></label>
+        <input id="xPoint" type="range" min="-8" max="8" step="0.01" value="1" />
+      </div>
+      <div>
+        <label for="scale">Масштаб (пікселів на 1 одиницю)</label>
+        <input id="scale" type="number" min="20" max="120" value="45" />
+      </div>
+      <div>
+        <button id="drawBtn">Побудувати</button>
+      </div>
+    </div>
+
+    <p class="hint">Підтримуються: + - * / ^, дужки, sin cos tan log ln sqrt abs exp, pi, e.</p>
+    <div id="message" class="hint">Введіть функцію та натисніть «Побудувати».</div>
+
+    <div class="canvas-wrap">
+      <canvas id="graph" width="960" height="540"></canvas>
+    </div>
+
+    <div class="stats">
+      <div class="card">f(x₀): <strong id="fx">—</strong></div>
+      <div class="card">f′(x₀): <strong id="dfx">—</strong></div>
+      <div class="card">Дотична: <strong id="tangent">—</strong></div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('graph');
+    const ctx = canvas.getContext('2d');
+    const exprInput = document.getElementById('expr');
+    const xPoint = document.getElementById('xPoint');
+    const xLabel = document.getElementById('xLabel');
+    const scaleInput = document.getElementById('scale');
+    const drawBtn = document.getElementById('drawBtn');
+    const message = document.getElementById('message');
+    const fxEl = document.getElementById('fx');
+    const dfxEl = document.getElementById('dfx');
+    const tangentEl = document.getElementById('tangent');
+
+    function compileExpression(raw) {
+      const normalized = raw
+        .toLowerCase()
+        .replace(/\^/g, '**')
+        .replace(/\bln\b/g, 'log')
+        .replace(/\bpi\b/g, 'Math.PI')
+        .replace(/\be\b/g, 'Math.E')
+        .replace(/\b(sin|cos|tan|sqrt|abs|exp|log)\b/g, 'Math.$1');
+
+      return new Function('x', `"use strict"; return (${normalized});`);
+    }
+
+    function derivative(fn, x) {
+      const h = 1e-5;
+      return (fn(x + h) - fn(x - h)) / (2 * h);
+    }
+
+    function toCanvasX(x, scale) {
+      return canvas.width / 2 + x * scale;
+    }
+
+    function toCanvasY(y, scale) {
+      return canvas.height / 2 - y * scale;
+    }
+
+    function drawAxes(scale) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+
+      for (let x = canvas.width / 2; x < canvas.width; x += scale) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let x = canvas.width / 2; x > 0; x -= scale) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = canvas.height / 2; y < canvas.height; y += scale) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+      for (let y = canvas.height / 2; y > 0; y -= scale) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.stroke();
+    }
+
+    function plot() {
+      const scale = Number(scaleInput.value);
+      const x0 = Number(xPoint.value);
+      xLabel.textContent = x0.toFixed(2);
+
+      let fn;
+      try {
+        fn = compileExpression(exprInput.value.trim());
+      } catch {
+        message.textContent = 'Помилка в записі функції.';
+        message.className = 'error';
+        return;
+      }
+
+      drawAxes(scale);
+
+      ctx.strokeStyle = '#22d3ee';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      let started = false;
+      for (let px = 0; px < canvas.width; px++) {
+        const x = (px - canvas.width / 2) / scale;
+        let y = fn(x);
+        if (!Number.isFinite(y) || Math.abs(y) > 1000) {
+          started = false;
+          continue;
+        }
+        const py = toCanvasY(y, scale);
+        if (!started) {
+          ctx.moveTo(px, py);
+          started = true;
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.stroke();
+
+      const y0 = fn(x0);
+      const m = derivative(fn, x0);
+      if (!Number.isFinite(y0) || !Number.isFinite(m)) {
+        message.textContent = 'У вибраній точці похідну не вдається обчислити.';
+        message.className = 'error';
+        fxEl.textContent = '—';
+        dfxEl.textContent = '—';
+        tangentEl.textContent = '—';
+        return;
+      }
+
+      ctx.strokeStyle = '#f87171';
+      ctx.lineWidth = 2;
+      const leftX = -(canvas.width / 2) / scale;
+      const rightX = (canvas.width / 2) / scale;
+      const leftY = y0 + m * (leftX - x0);
+      const rightY = y0 + m * (rightX - x0);
+      ctx.beginPath();
+      ctx.moveTo(toCanvasX(leftX, scale), toCanvasY(leftY, scale));
+      ctx.lineTo(toCanvasX(rightX, scale), toCanvasY(rightY, scale));
+      ctx.stroke();
+
+      ctx.fillStyle = '#4ade80';
+      ctx.beginPath();
+      ctx.arc(toCanvasX(x0, scale), toCanvasY(y0, scale), 4.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      fxEl.textContent = y0.toFixed(6);
+      dfxEl.textContent = m.toFixed(6);
+
+      const b = y0 - m * x0;
+      const sign = b >= 0 ? '+' : '-';
+      tangentEl.textContent = `y = ${m.toFixed(4)}x ${sign} ${Math.abs(b).toFixed(4)}`;
+
+      message.textContent = 'Графік і дотична побудовані успішно.';
+      message.className = 'success';
+    }
+
+    drawBtn.addEventListener('click', plot);
+    xPoint.addEventListener('input', plot);
+    plot();
+  </script>
+</body>
+</html>
